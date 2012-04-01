@@ -68,6 +68,7 @@ var distanceCalc = function(start, end, next){
     params.destination = end;
     var url = 'http://localhost:1337/distance/' +  "?" + 
         querystring.stringify(params);
+    console.log(url);
     request(url, function(err, response, body){
         if (err){
             console.log("error occurred while calculating");
@@ -96,7 +97,7 @@ var submitNotificationRequest = function(phone, time, message){
                 return;
             }
             console.log("submitted notification for " + 
-                new Date(notification.time * 1000));
+                new Date(notification.time));
     });
 }
 
@@ -117,10 +118,11 @@ var notifyFunc = function(req, res, tokens, values){
     }); 
     req.on('end', function(){
         var processed_data = querystring.parse(post_data);
-        var start_station = processed_data.start;
+        var start_station = processed_data.start.toUpperCase();
         var direction = processed_data.dir;
-        var location = processed_data.location;
+        var location = processed_data.lat + ',' + processed_data.long
         var phone = processed_data.phone;
+        console.log(start_station, direction, location, phone); 
         var notificationTime = function(err, duration){
             if (err){
                 res.writeHead(500, {'Content-Type': 'text/plain'});
@@ -139,7 +141,10 @@ var notifyFunc = function(req, res, tokens, values){
                     return;
                 }
                 var bartETD = JSON.parse(body);
-                var bestArrivalTime = 10000000; // fix this
+                var bestArrivalTime = null; // fix this
+                console.dir(bartETD);
+                console.dir(bartETD.station);
+                console.dir(bartETD.station.etd);
                 for (var i = 0; i < bartETD.station.etd.length; ++i){
                     var etd = bartETD.station.etd[i];
                     for (var j = 0; j < etd.estimate.length; ++j){
@@ -147,11 +152,12 @@ var notifyFunc = function(req, res, tokens, values){
                         console.log("duration is " + duration);
                         console.log("arrivalTime is " + arrivalTime); 
                         if (duration < arrivalTime && 
-                            arrivalTime < bestArrivalTime){
+                            (!bestArrivalTime || arrivalTime < bestArrivalTime)){
                             bestArrivalTime = arrivalTime;    
                         }
                     }
                 }
+                var jsonResponse = {'notificationTime': "No Time!",  'phone': phone};
                 if (bestArrivalTime){
                     console.log("best time is " + bestArrivalTime);
                     var notificationTime = 
@@ -161,12 +167,13 @@ var notifyFunc = function(req, res, tokens, values){
                         createNotificationMessage(start_station, 
                         duration, bestArrivalTime));
                     res.writeHead(200, {'Content-Type': 'text/plain'});
-                    res.end("will get notified at " + 
-                        new Date(notificationTime * 1000) + " to " + phone);
+                    jsonResponse = {'notificationTime': (new Date(notificationTime * 1000)).toString(),
+                        'phone': phone};
+                    res.end(JSON.stringify(jsonResponse));
                     return; 
                 }
                 res.writeHead(200, {'Content-Type': 'text/plain'});
-                res.end("NO TIME!");
+                res.end(JSON.stringify(jsonResponse));
             });
         };     
         var distanceTravel = distanceCalc(location, 
@@ -176,7 +183,7 @@ var notifyFunc = function(req, res, tokens, values){
 
 var checkFunc = function(req, res){
     res.writeHead(200, {'Content-Type': 'text/plain'});
-    res.end("hello world");
+    res.end("check func success");
 };
 
 var router = beeline.route({
