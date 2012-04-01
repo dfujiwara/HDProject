@@ -5,43 +5,42 @@ var parser = new xml2js.Parser();
 var beeline = require('beeline');
 var querystring = require('querystring');
 var urlPackage = require('url');
-var redis = require('redis');
-var client = redis.createClient();
-
-// bart API
-var bartUrlBase = "http://api.bart.gov/api/etd.aspx?";
-var bartStationUrlBase = "http://api.bart.gov/api/stn.aspx"; 
-var bartKey = 'MW9S-E7SL-26DU-VV8V';
+var apiutils = require('./apiutils');
+var config = require('../common/config');
+var step = require('step/lib/step');
 
 var bartFunc = function(req, res, tokens, values){
-   var params = {};
-   var get_params = urlPackage.parse(req.url, true);
-   params.cmd = 'etd';
-   params.key = bartKey;
-   params.dir = get_params.query.dir;
-   params.orig = get_params.query.station;
-
-   var url = bartUrlBase + querystring.stringify(params); 
-   console.log(url);
-   function requestCallback(error, response, body){
-     function parserCallback(err, result){
-       res.writeHead(response.statusCode, {'Content-Type': 'text/plain'});
-       if (!err){
-         res.end(JSON.stringify(result));
-       }
-       else{
-         res.end("failed!");
-       }
-     }
-     // parse the results into JSON
-     parser.parseString(body, parserCallback);
-   }
-   request(url, requestCallback);
+    var params = {};
+    var get_params = urlPackage.parse(req.url, true);
+    params.cmd = 'etd';
+    params.key = config.bart.key;
+    params.dir = get_params.query.dir;
+    params.orig = get_params.query.station;
+    var url = config.bart.realTimeUrl + '?' + querystring.stringify(params); 
+    console.log(url);
+    step(
+        function start(){
+            request(url, this);
+        },
+        function requestCallback(err, response, body){
+            if (err){
+                return;
+            }
+            res.writeHead(response.statusCode, {'Content-Type': 'text/plain'});
+            parser.parseString(body, this);
+        },
+        function parserCallback(err, result){
+            if (!err){
+                res.end(JSON.stringify(result));
+            }
+            else{
+                res.end("failed!");
+            }
+        }
+    );
 };
 
 // distance API
-var distanceUrlBase = 
-    'https://maps.googleapis.com/maps/api/distancematrix/json?';
 var distanceFunc = function(req, res, tokens, values){
     // get the request GET params
     var get_params = urlPackage.parse(req.url, true);
@@ -50,67 +49,23 @@ var distanceFunc = function(req, res, tokens, values){
     params.destinations = get_params.query.destination;
     params.sensor = 'false';
     params.mode = 'walking';
-    var url = distanceUrlBase + querystring.stringify(params);
-    request(url, function(err, response, body){
-        res.writeHead(response.statusCode, {'Content-Type': 'text/plain'});
-        if (err){
-            res.end("failed");
-            return;
-        }
-        res.end(body);
-    });
-};
-
-/* function to calculate the walking distance and time */
-var distanceCalc = function(start, end, next){
-    var params = {};
-    params.origin = start;
-    params.destination = end;
-    var url = 'http://localhost:1337/distance/' +  "?" + 
-        querystring.stringify(params);
+    var url = config.google.distanceUrl + "?" + querystring.stringify(params);
     console.log(url);
-    request(url, function(err, response, body){
-        if (err){
-            console.log("error occurred while calculating");
-            next(err, null);
-            return;
-        }        
-        // retrieve the time it takes to get to that point
-        var distanceResult = JSON.parse(body);
-        var duration = distanceResult.rows[0].elements[0].duration;
-        next(err, duration.value);
-    });
-}; 
-
-/* submit notification request */
-var submitNotificationRequest = function(phone, time, message){
-    var notification = {};
-    notification.time = time * 1000;
-    notification.toNum = phone;
-    notification.fromNum = '+14155992671';
-    notification.message = message; 
-    client.zadd("notification", notification.time,  
-        JSON.stringify(notification),
-        function (err, resp){
+    step(
+        function start(){
+            request(url, this);
+        },
+        function callback(err, response, body){
+            res.writeHead(response.statusCode, {'Content-Type': 'text/plain'});
             if (err){
-                console.error("error submitted notification: " + err);
+                res.end("failed");
                 return;
             }
-            console.log("submitted notification for " + 
-                new Date(notification.time));
-    });
-}
+            res.end(body);
+        } 
+    );
+};
 
-/* create notification message */
-var createNotificationMessage = function(station, duration, arrivalTime){
-    var message = "Leave now to get to " + station + " station. ";
-    message += "Train arrives in " + 
-        (arrivalTime / 60).toString()+ " minutes; ";
-    message += "it will take " + (duration / 60).toString() + 
-        " minutes to walk there.";
-    return message;
-}
- 
 var notifyFunc = function(req, res, tokens, values){
     var post_data = '';
     req.on('data', function(chunk){
@@ -123,61 +78,90 @@ var notifyFunc = function(req, res, tokens, values){
         var location = processed_data.lat + ',' + processed_data.long
         var phone = processed_data.phone;
         console.log(start_station, direction, location, phone); 
-        var notificationTime = function(err, duration){
-            if (err){
-                res.writeHead(500, {'Content-Type': 'text/plain'});
-                res.end("something went wrong");
-                return;
-            }
-            var params = {}
-            params.station = start_station;
-            params.dir = direction;
-            var url = 'http://localhost:1337/bart/' + '?' + 
-                querystring.stringify(params);
-            request(url, function(err, response, body){
-                if (err){
-                    res.writeHead(500, {'Content-Type': 'text/plain'});
-                    res.end("bad bart error");
-                    return;
+
+        /* function to calculate the walking distance and time */
+        var distanceCalc = function(origin, destination, next){
+            step(
+                function start(){
+                    var params = {};
+                    params.origin = origin;
+                    params.destination = destination;
+                    var url = 'http://localhost:1337/distance/' +  "?" + 
+                        querystring.stringify(params);
+                    console.log(url);
+                    request(url, this);
+                },
+                function callBack(err, response, body){
+                    if (err){
+                        console.log("error occurred while calculating");
+                        next(err, null);
+                        return;
+                    }        
+                    // retrieve the time it takes to get to that point
+                    console.log("distance is " + body);
+                    var distanceResult = JSON.parse(body);
+                    var duration = distanceResult.rows[0].elements[0].duration;
+                    next(err, duration.value);
                 }
-                var bartETD = JSON.parse(body);
-                var bestArrivalTime = null; // fix this
-                console.dir(bartETD);
-                console.dir(bartETD.station);
-                console.dir(bartETD.station.etd);
-                for (var i = 0; i < bartETD.station.etd.length; ++i){
-                    var etd = bartETD.station.etd[i];
-                    for (var j = 0; j < etd.estimate.length; ++j){
-                        var arrivalTime = etd.estimate[j].minutes * 60;
-                        console.log("duration is " + duration);
-                        console.log("arrivalTime is " + arrivalTime); 
-                        if (duration < arrivalTime && 
-                            (!bestArrivalTime || arrivalTime < bestArrivalTime)){
-                            bestArrivalTime = arrivalTime;    
+            );
+        }; 
+        var notificationTime = function(next){
+            step(
+                function start(){
+                    var params = {}
+                    params.station = start_station;
+                    params.dir = direction;
+                    var url = 'http://localhost:1337/bart/' + '?' + 
+                        querystring.stringify(params);
+                    request(url, this)
+                },
+                function callBack(err, response, body){
+                    if (err){
+                        res.writeHead(500, {'Content-Type': 'text/plain'});
+                        res.end("bad bart error");
+                        return;
+                    }
+                    console.log("body is " + body);
+                    var bartETD = JSON.parse(body);
+                    var bestArrivalTime = null; // fix this
+                    for (var i = 0; i < bartETD.station.etd.length; ++i){
+                        var etd = bartETD.station.etd[i];
+                        for (var j = 0; j < etd.estimate.length; ++j){
+                            var arrivalTime = etd.estimate[j].minutes * 60;
+                            console.log("duration is " + duration);
+                            console.log("arrivalTime is " + arrivalTime); 
+                            if (duration < arrivalTime && 
+                                (!bestArrivalTime || arrivalTime < bestArrivalTime)){
+                                bestArrivalTime = arrivalTime;    
+                            }
                         }
                     }
+                    next(err, bestArrivalTime);
                 }
-                var jsonResponse = {'notificationTime': "No Time!",  'phone': phone};
-                if (bestArrivalTime){
-                    console.log("best time is " + bestArrivalTime);
+            );
+        };     
+        step(
+            function start(){
+                distanceCalc(location, bartAddress[start_station], 
+                    this.parallel());
+                notificationTime(this.parallel());    
+            },
+            function notify(err, duration, arrivalTime){
+                var jsonResponse = {'notificationTime': -1,  'phone': phone};
+                res.writeHead(200, {'Content-Type': 'text/plain'});
+                if (arrivalTime){
+                    console.log("best time is " + arrivalTime);
                     var notificationTime = 
                         Math.round(new Date().getTime() / 1000) + 
-                        (bestArrivalTime - duration);
-                    submitNotificationRequest(phone, notificationTime,
-                        createNotificationMessage(start_station, 
-                        duration, bestArrivalTime));
-                    res.writeHead(200, {'Content-Type': 'text/plain'});
-                    jsonResponse = {'notificationTime': (new Date(notificationTime * 1000)).toString(),
-                        'phone': phone};
-                    res.end(JSON.stringify(jsonResponse));
-                    return; 
+                        (arrivalTime - duration);
+                    apiutils.submitNotificationRequest(phone, notificationTime,
+                        apiutils.createNotificationMessage(start_station, 
+                        duration, arrivalTime));
+                    jsonResponse.notificationTime = notificationTime;
                 }
-                res.writeHead(200, {'Content-Type': 'text/plain'});
                 res.end(JSON.stringify(jsonResponse));
-            });
-        };     
-        var distanceTravel = distanceCalc(location, 
-            bartAddress[start_station], notificationTime);      
+            }    
+        );
     }); 
 };
 
@@ -187,7 +171,6 @@ var checkFunc = function(req, res){
 };
 
 var router = beeline.route({
-    //"/bart/`station`": {'GET': bartFunc}, // doesn't work
     "/bart/": {'GET': bartFunc},
     '/distance/': {'GET': distanceFunc},
     '/notify/': {'POST': notifyFunc},
@@ -196,31 +179,41 @@ var router = beeline.route({
 
 // initialize function
 var bartAddress = {};
-(function (){
-    // get all bart station information first
-    var params = {}
-    params.cmd = 'stns';
-    params.key = bartKey;
-    var url = bartStationUrlBase + "?" + querystring.stringify(params);
-    request(url, function(err, response, body){
+step(
+    function initialize(){
+        var params = {};
+        params.cmd = 'stns';
+        params.key = config.bart.key;
+        var url = config.bart.stationUrl + "?" + querystring.stringify(params);
+        debugger;
+        request(url, this);
+    },
+    function parseResponse(err, res, body){
         if (err){
             console.log("error requesting station info");
             return;
         }
-        parser.parseString(body, function(err, result){  
-            if (err){
-                console.log("error parsing station info");
-                return;
-            }
-            for (var i = 0; i < result.stations.station.length; ++i) {
-                var station = result.stations.station[i];
-                var address = station.address + ' ' + 
-                    station.city + ' ' + station.state + ' ' + station.zipcode;
-                bartAddress[station.abbr] = address;
-            }
-            var server = http.createServer(router);
-            server.listen(1337, '0.0.0.0');
-            console.log("running the server");
-        });
-    });
-})();
+        parser.parseString(body, this);
+    },
+    function populateAddresses(err, result){ 
+        if (err){
+            console.log("error parsing station info");
+            return;
+        }
+        for (var i = 0; i < result.stations.station.length; ++i) {
+            var station = result.stations.station[i];
+            var address = station.address + ' ' + 
+                station.city + ' ' + station.state + ' ' + station.zipcode;
+            bartAddress[station.abbr] = address;
+        }
+        return true;
+    },
+    function startServer(err){
+        if (err){
+            console.error("error occurred: " + err);
+        }
+        var server = http.createServer(router);
+        server.listen(config.HDProject.port, '0.0.0.0');
+        console.log("running the server");
+    }
+);
