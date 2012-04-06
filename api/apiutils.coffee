@@ -1,8 +1,7 @@
 #redis = require 'redis'
 require('date-utils')
 #redisClient = redis.createClient()
-redis = require('redis-url')
-redisClient = redis.connect(process.env.REDISTOGO_URL)
+redisClient = require('redis-url').connect(process.env.REDISTOGO_URL)
 
 createNotificationMessage = (station, duration, arrivalTime) ->
     trainArrivalTime = 

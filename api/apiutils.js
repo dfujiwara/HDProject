@@ -1,11 +1,9 @@
 (function() {
-  var createNotificationMessage, redis, redisClient, submitNotificationRequest;
+  var createNotificationMessage, redisClient, submitNotificationRequest;
 
   require('date-utils');
 
-  redis = require('redis-url');
-
-  redisClient = redis.connect(process.env.REDISTOGO_URL);
+  redisClient = require('redis-url').connect(process.env.REDISTOGO_URL);
 
   createNotificationMessage = function(station, duration, arrivalTime) {
     var message, trainArrivalTime, walk;
