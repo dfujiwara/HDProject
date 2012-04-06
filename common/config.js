@@ -17,7 +17,7 @@
   };
 
   HDProject = {
-    port: 1337,
+    port: process.env.PORT || 3000,
     domain: 'localhost'
   };
 

@@ -11,7 +11,7 @@ google =
     distanceUrl: 'https://maps.googleapis.com/maps/api/distancematrix/json'
 
 HDProject =
-    port: 1337
+    port: process.env.PORT || 3000; 
     domain: 'localhost'
 
 module.exports.twilio = twilio
