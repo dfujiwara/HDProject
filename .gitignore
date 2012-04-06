@@ -1,4 +1,2 @@
-*.js
 *.swp
 *node_modules*
-config.coffee
