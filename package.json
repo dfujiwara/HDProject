@@ -1,0 +1,17 @@
+{
+    'name': 'HDProject',
+    'description': 'API and daemon code for HDProject',
+    'version': '0.0.1',
+    'keywords': ['HDProject', 'San Francisco'],
+    'contributors': ['Daisuke Fujiwara', 'Hiten Parmer'],
+    'files': ['api', 'common', 'daemon'],
+    'dependencies': {
+        'step': '0.0.5',
+        'express': '>=2.5.8',
+        'beeline': '0.1.9',
+        'date-util': '1.2.10',
+        'request': '2.9.100',
+        'twilio': '0.4.0',
+        'xml2js': '0.1.13'
+    }
+}
