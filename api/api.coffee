@@ -7,61 +7,57 @@ querystring = require("querystring")
 urlPackage = require("url")
 apiutils = require("./apiutils")
 config = require("../common/config")
-step = require("step/lib/step")
+step = require("stepc")
 
-bartFunc = (req, res, tokens, values) ->
+bartFunc = (station, direction, next) ->
   params = {}
   params.cmd = "etd"
   params.key = config.bart.key
-  get_params = urlPackage.parse(req.url, true)
-  params.dir = get_params.query.dir
-  params.orig = get_params.query.station
+  params.dir = direction 
+  params.orig = station
   url = config.bart.realTimeUrl + "?" + querystring.stringify(params)
   console.log url
-  step (start = ->
+  step.async (start = ->
     request url, this
-    return
   ), (requestCallback = (err, response, body) ->
     if err
-        console.log("error:" + err)
-        this(err)
-        return
-    res.writeHead response.statusCode,
-      "Content-Type": "text/plain"
+        throw err
     parser.parseString body, this
-    return
-  ), parserCallback = (err, result) ->
+  ), parserCallback = (err, bartETD) ->
     # check for the error code
-    unless err
-      console.log(JSON.stringify(result))
-      res.end JSON.stringify(result)
-    else
-      console.log("failed bart!!!!!: " + err)
-      res.end "failed! : " + err
-    return
+    if err
+      next(err, [])
+    console.dir bartETD.station.etd
 
-distanceFunc = (req, res, tokens, values) ->
-  get_params = urlPackage.parse(req.url, true)
+    arrivalEstimates = []
+    for etd in bartETD.station.etd
+        if etd.estimate instanceof Array
+          for estimate in etd.estimate
+            arrivalEstimates.push(estimate)
+        else 
+          arrivalEstimates.push(etd.estimate)
+    console.dir(arrivalEstimates)
+    next(err, arrivalEstimates)
+
+distanceFunc = (origin, destination, next) ->
   params = {}
-  params.origins = get_params.query.origin
-  params.destinations = get_params.query.destination
+  params.origins = origin
+  params.destinations = destination
   params.sensor = "false"
   params.mode = "walking"
   url = config.google.distanceUrl + "?" + querystring.stringify(params)
   console.log url
-  step (start = ->
+  step.async (start = ->
     request url, this
-    return
-  ), callback = (err, response, body) ->
-    res.writeHead response.statusCode,
-      "Content-Type": "text/plain"
-
-    # check the error code
+  ), callBack = (err, response, body) ->
     if err
-      res.end "failed! : " + err
-    else
-      res.end body
-    return
+      console.log "error occurred while calculating"
+      next err, null
+      return
+    console.log "distance is " + body
+    distanceResult = JSON.parse(body)
+    duration = distanceResult.rows[0].elements[0].duration
+    next err, duration.value
 
 notifyFunc = (req, res, tokens, values) ->
   post_data = ""
@@ -82,58 +78,12 @@ notifyFunc = (req, res, tokens, values) ->
         return
 
     console.log start_station, direction, location, phone
-    distanceCalc = (origin, destination, next) ->
-      step (start = ->
-        params = {}
-        params.origin = origin
-        params.destination = destination
-        url = "http://localhost:1337/distance/" + "?" + querystring.stringify(params)
-        console.log url
-        request url, this
-        return
-      ), callBack = (err, response, body) ->
-        if err
-          console.log "error occurred while calculating"
-          next err, null
-          return
-        console.log "distance is " + body
-        distanceResult = JSON.parse(body)
-        duration = distanceResult.rows[0].elements[0].duration
-        next err, duration.value
-
-    notificationTime = (next) ->
-      step (start = ->
-        params = {}
-        params.station = start_station
-        params.dir = direction
-        url = "http://localhost:1337/bart/" + "?" + querystring.stringify(params)
-        console.log url
-        request url, this
-        return
-      ), callBack = (err, response, body) ->
-        if err
-          res.writeHead 500,
-            "Content-Type": "text/plain"
-
-          res.end "bad bart error"
-          return
-        console.log "body is " + body
-        bartETD = JSON.parse(body)
-        console.dir bartETD.station.etd
-
-        arrivalEstimates = []
-        for etd in bartETD.station.etd
-            if etd.estimate instanceof Array
-              for estimate in etd.estimate
-                arrivalEstimates.push(estimate)
-            else 
-              arrivalEstimates.push(etd.estimate)
-        next err, arrivalEstimates
-
-    step (start = ->
-      distanceCalc location, bartAddress[start_station], @parallel()
-      notificationTime @parallel()
+      
+    step.async (start = ->
+      distanceFunc location, bartAddress[start_station], @parallel()
+      bartFunc start_station, direction, @parallel()
     ), notify = (err, duration, arrivalETDs) ->
+      console.log duration, arrivalETDs
       jsonResponse =
         notificationTime: -1
         phone: phone
@@ -162,10 +112,6 @@ checkFunc = (req, res) ->
   res.end "check func success"
 
 router = beeline.route(
-  "/bart/":
-    GET: bartFunc
-  "/distance/":
-    GET: distanceFunc
   "/notify/":
     POST: notifyFunc
   "/check/":
@@ -173,38 +119,32 @@ router = beeline.route(
 )
 
 bartAddress = {}
-step (initialize = ->
+step.async (initialize = ->
   params = {}
   params.cmd = "stns"
   params.key = config.bart.key
   url = config.bart.stationUrl + "?" + querystring.stringify(params)
   console.log url
   request(url, this)
-  return
 ), 
 (parseResponse = (err, res, body) ->
   if err
     console.log("error requesting station info")
-    return
+    throw err
   parser.parseString(body, this)
-  return
 ), 
 (populateAddresses = (err, result) ->
   if err
     console.log("error parsing station info: " + err)
-    this(true)
-    return
+    throw err
   for station in result.stations.station
     address = "#{station.address} #{station.city} #{station.state} #{station.zipcode}"
     bartAddress[station.abbr] = address
-  this(false)
   return
 ), 
 (startServer = (err) ->
   if err
-     console.log("not starting the server")
-     return
-  console.error "error occurred: " + err  if err
+    throw err
   server = http.createServer(router)
   server.listen(config.HDProject.port, "0.0.0.0")
   console.log("running the server")
